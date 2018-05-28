@@ -1,0 +1,4 @@
+/code
+*.exe
+*.csv
+**/__pycache__
