@@ -18,15 +18,15 @@ import pandas as pd
 
 from ACGTClassifier import ACGTClassifier
 
-import cProfile
-import pstats
-import io
+
+def repeat_to_length(string_to_expand, length):
+    return (string_to_expand * (int(length / len(string_to_expand)) + 1))[:length]
 
 val = {'A': 1, 'C': -.5, 'G': -.25, 'T': 0}
 
 
 def stringtofeatures(s, nlen):
-    arr = [val[c] for c in s[:nlen]]
+    arr = [val[c] for c in repeat_to_length(s, nlen)]
     arr = abs(np.fft.rfft(arr, n=nlen))
     return scale(arr, copy=False)
 
@@ -54,16 +54,17 @@ def grid_search(fastas, labels):
 
 
 def find_seq_length(X):
-    minlength = min(map(len, X))
+    minlength = int(min(map(len, X)))
+    # minlength = int(np.median(list(map(len, X))))
     cutoffbits = max(0, minlength.bit_length() - 3)
     return (minlength >> cutoffbits) << cutoffbits
 
 # tries one set of val and prints the result
 
 
-def try_one_val(fastas, labels, val, classifiers, leaky=True):
-    ffts = np.matrix([stringtofeatures(s, find_seq_length(fastas))
-                      for s in fastas])
+def try_one_val(fastas, labels, classifiers, leaky=True):
+    nlen = find_seq_length(fastas)
+    ffts = np.matrix([stringtofeatures(s, nlen) for s in fastas])
     if leaky:
         numbers = ffts * ffts.T
     else:
@@ -77,7 +78,7 @@ def try_one_val(fastas, labels, val, classifiers, leaky=True):
     for cl in classifiers:
         if leaky:
             scores = cross_val_score(
-                cl, ffts, labels, cv=10, n_jobs=5, verbose=1)
+                cl, numbers, labels, cv=10, n_jobs=5, verbose=1)
         else:
             # I am passing in correlation matrices, not dfts
             # CV is too slow in non-leaky case
@@ -92,7 +93,7 @@ def try_one_val(fastas, labels, val, classifiers, leaky=True):
 
 
 if __name__ == '__main__':
-    filename = "Insects"
+    filename = "Fungi"
     with open("cleaned/1" + filename + ".fasta", 'r') as fi:
         N = int(fi.readline())
         sizes = []
@@ -115,4 +116,4 @@ if __name__ == '__main__':
     # classifiers = [LogisticRegression(),MLPClassifier()]
     classifiers = [SVC(kernel='linear'), LogisticRegression()]
     # classifiers = [ACGTClassifier()]
-    try_one_val(fastas, labels, val, classifiers, leaky=False)
+    try_one_val(fastas, labels, classifiers, leaky=True)
