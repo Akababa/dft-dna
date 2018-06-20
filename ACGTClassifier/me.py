@@ -8,52 +8,78 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import accuracy_score
 
 
+def repeat_to_length(string_to_expand, length):
+    return (string_to_expand * (int(length / len(string_to_expand)) + 1))[:length]
+
+
+# calculate the length of a representation according to some heuristic
+# i try to keep it with lots of factors of 2 for FFT
+def find_seq_length(X):
+    mylength = int(np.median(list(map(len, X))))
+    # print(mylength)
+    cutoffbits = max(0, mylength.bit_length() - 3)
+    return (mylength >> cutoffbits) << cutoffbits
+
+
+def stringtofeatures(s, nlen, val):
+    arr = val[np.fromstring(s, dtype=np.uint8)]
+    arr = np.abs(np.fft.rfft(arr, n=nlen))
+    # print(type(arr), arr.dtype)
+    return scale(arr, copy=False)
+
+
+def getallffts(fastas, val=None, four=False):
+    nlen = find_seq_length(fastas)
+    if four:
+        ffts = np.array([np.matrix([np.abs(np.fft.rfft(np.fromstring(
+            s, dtype=np.uint8) == ord(letter), n=nlen)) for letter in "ACGT"]) for s in fastas])
+    else:
+        assert val is not None
+        arr = np.empty(256, dtype=float)
+        for k, v in val.items():
+            arr[ord(k)] = v
+        ffts = np.matrix([stringtofeatures(s, nlen, arr) for s in fastas])
+    return ffts
+
+
 class ACGTClassifier(BaseEstimator, ClassifierMixin):
 
-    def __init__(self, Aval=1, Cval=-1, Gval=-1, Tval=0, estimator=SVC(kernel='linear')):
-        self.est = estimator
-        self.vals = {'A': Aval, 'C': Cval, 'G': Gval, 'T': Tval}
+    def __init__(self, A=1, C=-1, G=-1, T=0, estimator=SVC(kernel='linear')):
+        self.estimator = estimator
+        self.A = A
+        self.C = C
+        self.G = G
+        self.T = T
+        self.val = np.empty(256, dtype=float)
 
-    def get_params(self, deep=False):
-        params = self.est.get_params(deep=deep)
-        vals = {(k + 'val'): v for k, v in self.vals.items()}
-        return {**params, **vals}
+    def _update_val(self):
+        self.val[ord('A')] = self.A
+        self.val[ord('C')] = self.C
+        self.val[ord('G')] = self.G
+        self.val[ord('T')] = self.T
 
-    def set_params(self, Aval=None, Cval=None, Gval=None, Tval=None, **params):
-        if Aval:
-            self.vals['A'] = Aval
-        if Cval:
-            self.vals['C'] = Cval
-        if Gval:
-            self.vals['G'] = Gval
-        if Tval:
-            self.vals['T'] = Tval
-        self.est.set_params(**params)
-        return self
-
-    def _stringtofeatures(self, s):
-        arr = [self.vals[c] for c in s[:self.nlen]]
-        arr = abs(np.fft.rfft(arr, n=self.nlen))
-        return scale(arr, copy=False)
-
-    @staticmethod
-    def _find_seq_length(X):
-        minlength = min(map(len, X))
-        cutoffbits = max(0, minlength.bit_length() - 3)
-        return (minlength >> cutoffbits) << cutoffbits
-
-    def _help(self, X, y):
-        self.nlen = self._find_seq_length(X)
-
-        if type(X[0]) is str:
-            X = np.matrix([self._stringtofeatures(s) for s in X])
-
-        # X, y = check_X_y(X, y)
-        # Store the classes seen during fit
-        self.classes_ = unique_labels(y)
-
-        self._X = X
-        self._y = y
+    def makeX(self, X):
+        if type(X[0]) is str:  # only convert it if it's ACGT
+            self._update_val()
+            return np.matrix([stringtofeatures(s, self.nlen, self.val)
+                              for s in X])
+        elif X[0].shape[0] == 4:  # it's in separate letter form
+            l = np.array([self.A, self.C, self.G, self.T])
+            # l = l.reshape((4, 1))
+            X = np.transpose(X, (0, 2, 1))
+            # print(X.shape)
+            # y = np.empty(X.shape[1:])
+            # XX = self.A * X[0] + self.C * X[1] + \
+            #     self.G * X[2] + self.T * X[3]
+            # XX = [self.A * s[0] + l[1] * s[1] + l[2]
+            #                 * s[2] + l[3] * s[3] for s in X]
+            # XX = np.dot(X, l)
+            XX = [np.dot(s, l) for s in X]
+            # print(XX.shape,type(XX))
+            XX = scale(XX, copy=False, axis=1)
+            # print(XX.shape, np.sum(XX[0]))
+            # print(type(XX))
+            return np.matrix(XX)
 
     def fit(self, X, y, is_ffts=True):
         """A reference implementation of a fitting function for a classifier.
@@ -71,12 +97,19 @@ class ACGTClassifier(BaseEstimator, ClassifierMixin):
             Returns self.
         """
 
-        if not is_ffts:
-            return self.est.fit(X, y)
+        # if not is_ffts:
+        #     return self.estimator.fit(X, y)
 
-        self._help(X, y)
+        self.nlen = find_seq_length(X)
 
-        return self.est.fit(self._X * self._X.T, y)
+        self._X = self.makeX(X)
+        self._y = y
+
+        # X, y = check_X_y(X, y)
+        # Store the classes seen during fit
+        self.classes_ = unique_labels(y)
+
+        return self.estimator.fit(self._X * self._X.T, y)
 
     def predict(self, X, is_ffts=True):
         """ A reference implementation of a prediction for a classifier.
@@ -95,16 +128,15 @@ class ACGTClassifier(BaseEstimator, ClassifierMixin):
         # Check is fit had been called
         # check_is_fitted(self, ['X_', 'y_'])
 
-        if not is_ffts:
-            return self.est.predict(X)
+        # if not is_ffts:
+        #     return self.estimator.predict(X)
 
-        if type(X[0]) is str:
-            X = np.matrix([self._stringtofeatures(s) for s in X])
+        X = self.makeX(X)
 
         # Input validation
         # X = check_array(X)
 
-        return self.est.predict(X * self._X.T)
+        return self.estimator.predict(X * self._X.T)
 
     def score(self, X, y, is_ffts=True):
         return accuracy_score(y, self.predict(X, is_ffts))

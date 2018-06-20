@@ -14,7 +14,7 @@ string getone(auto &fi) {
 	return tt;
 }
 
-string filename = "Protists.fasta";
+string filename = "fastas/Protists.fasta";
 
 int main() {
 	ifstream fi;
